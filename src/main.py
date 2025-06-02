@@ -7,10 +7,10 @@ from src.controllers.strategies.geometric import GeometricSIA
 def iniciar():
     """Punto de entrada principal"""
                     # ABCD #
-    estado_inicial = "100000000000000"  
-    condiciones =    "111111111111111"
-    alcance =        "011111111111111"
-    mecanismo =      "010101010101010"
+    estado_inicial = "100"  
+    condiciones =    "111"
+    alcance =        "111"
+    mecanismo =      "111"
 
     gestor_sistema = Manager(estado_inicial)
 
