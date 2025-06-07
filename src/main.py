@@ -3,15 +3,16 @@ from src.controllers.strategies.force import BruteForce
 from src.controllers.strategies.q_nodes import QNodes
 from src.controllers.strategies.geometric import GeometricSIA
 #from src.controllers.strategies.geometric_prueba import GeometricSIA
+from src.controllers.strategies.phi import Phi
 
 
 def iniciar():
     """Punto de entrada principal"""
                     # ABCD #
-    estado_inicial = "1000000000"  
-    condiciones =    "1111111111"
-    alcance =        "1111111111"
-    mecanismo =      "1111111111"
+    estado_inicial = "10000"  # Estado inicial del sistema
+    condiciones =    "11111"  # Condiciones del sistema
+    alcance =        "11111"  # Alcance de la solución
+    mecanismo =      "11111"  # Mecanismo de solución
 
     gestor_sistema = Manager(estado_inicial)
 
