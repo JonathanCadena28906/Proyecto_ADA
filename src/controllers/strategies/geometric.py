@@ -1,136 +1,51 @@
 import time
 import numpy as np
 import pandas as pd
-from itertools import combinations
-from collections import defaultdict, deque
-from typing import Dict, Tuple, List, Set, Optional
-try:
-    import networkx as nx
-except ImportError:
-    print("NetworkX not found. Installing...")
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "networkx"])
-    import networkx as nx
-
+from typing import List, Dict, Tuple, Set
 from src.middlewares.slogger import SafeLogger
+from src.funcs.base import ABECEDARY, emd_efecto
 from src.controllers.manager import Manager
 from src.models.base.sia import SIA
 from src.models.core.solution import Solution
-from src.funcs.base import emd_efecto
-from src.funcs.format import fmt_biparte_q
 from src.constants.base import EFECTO, ACTUAL
+from src.funcs.format import fmt_biparte_q
 
-
-class GeometricSIA(SIA):
+class GeometricSIA(SIA):  
     """
-    Implementación optimizada del enfoque geométrico para el análisis SIA basado en hipercubos n-dimensionales.
-    
-    Esta clase utiliza representaciones geométricas del sistema como hipercubos donde cada vértice
-    representa un estado posible. La estrategia principal es identificar patrones de complementariedad
-    causal mediante análisis de transiciones de costo cero y agrupamiento de variables.
-    
-    Attributes:
-        tabla_transiciones: Diccionario que almacena los costos de transición entre estados
-        cache_hamming: Cache para distancias de Hamming calculadas
-        cache_costos: Cache para costos calculados recursivamente
-        memoria_biparticiones: Almacena las biparticiones evaluadas y sus costos
-        tensores: Representación tensorial del subsistema
-        logger: Logger para el proceso geométrico
-        grupos_complementarios: Grupos de variables con patrones de complementariedad
+    Estrategia GeometricSIA que implementa análisis geométrico de hipercubos
+    con representación n-dimensional y cálculo de costos de transición.
     """
     
-    def __init__(self, gestor: Manager):
-        super().__init__(gestor)
-        self.tabla_transiciones: Dict[Tuple[int, int, int], float] = {}
-        self.cache_hamming: Dict[Tuple[int, int], int] = {}
-        self.cache_costos: Dict[Tuple[int, int, int], float] = {}
-        self.memoria_biparticiones: Dict[Tuple, Tuple[float, np.ndarray]] = {}
-        self.tensores: List[np.ndarray] = []
-        self.logger = SafeLogger("geometric_strategy")
-        self.grupos_complementarios: List[Set[int]] = []
+    def __init__(self, config: Manager):  # Cambio aquí: _init_ → __init__
+        super().__init__(config)  # Cambio aquí: _init_ → __init__
+        self.logger = SafeLogger("geometric_sia")
+        self.tensores = []
+        self.tabla_transiciones = {}
+        self.cache_hamming = {}
+        self.cache_costos = {}
         
-    def aplicar_estrategia(self, condiciones: str, alcance: str, mecanismo: str):
+    def aplicar_estrategia(self, conditions, purview, mechanism):
         """
-        Implementa el algoritmo geométrico optimizado para encontrar la bipartición óptima
-        utilizando análisis de complementariedad causal y transiciones de costo cero.
-        
-        Args:
-            condiciones: String binario para condiciones de fondo
-            alcance: String binario para variables de alcance  
-            mecanismo: String binario para variables de mecanismo
-            
-        Returns:
-            Solution: Objeto con la solución encontrada
+        Método principal que ejecuta la estrategia GeometricSIA.
         """
-        # Preparar el subsistema
-        self.sia_preparar_subsistema(condiciones, alcance, mecanismo)
+        # Llamar a la función que prepara el subsistema (heredada de SIA)
+        self.sia_preparar_subsistema(conditions, purview, mechanism)
         
-        # 1. Construir la representación n-dimensional del sistema
+        # Construir representación n-dimensional (tensores)
         self._construir_representacion_ndimensional()
         
-        # 2. Calcular la tabla de costos (T) para cada variable
+        # Mostrar información de los tensores y sus variables correspondientes
+        #self._mostrar_tensores_y_variables()
+        
+        # Calcular tabla de costos
         self._calcular_tabla_costos()
         
-        # 3. Descubrir biparticiones por análisis de costo cero y complementariedad
-        biparticion_optima = self._descubrir_biparticiones_por_costo_cero()
+        # Identificar bipartición óptima (nueva funcionalidad)
+        biparticion_optima = self._identificar_biparticion_optima()
         
-        # 4. Formatear y retornar el resultado
+        # Formatear y retornar resultado
         return self._formatear_resultado(biparticion_optima)
-    
-    def _decimal_to_little_endian_binary(self, decimal: int, n_bits: int) -> str:
-        """
-        Convierte un número decimal a su representación binaria little-endian.
-        En little-endian, el bit menos significativo está a la izquierda.
-        
-        Args:
-            decimal: Número decimal a convertir
-            n_bits: Número de bits para la representación
-            
-        Returns:
-            str: Representación binaria en formato little-endian
-        """
-        # Convertir a binario big-endian tradicional
-        big_endian = format(decimal, f'0{n_bits}b')
-        # Invertir para obtener little-endian
-        little_endian = big_endian[::-1]
-        return little_endian
-    
-    def _little_endian_to_decimal(self, little_endian_str: str) -> int:
-        """
-        Convierte una cadena binaria little-endian a decimal.
-        
-        Args:
-            little_endian_str: Cadena binaria en formato little-endian
-            
-        Returns:
-            int: Valor decimal correspondiente
-        """
-        # Invertir la cadena para obtener big-endian y convertir
-        big_endian = little_endian_str[::-1]
-        return int(big_endian, 2)
-    
-    def _obtener_vecinos_hipercubo(self, estado: int, n_bits: int) -> List[int]:
-        """
-        Obtiene los vecinos inmediatos de un estado en el hipercubo (distancia Hamming = 1).
-        Considera la representación little-endian.
-        
-        Args:
-            estado: Estado actual en decimal
-            n_bits: Número de bits del sistema
-            
-        Returns:
-            List[int]: Lista de estados vecinos
-        """
-        vecinos = []
-        
-        # Para cada bit, alternar su valor para obtener vecinos
-        for bit_pos in range(n_bits):
-            vecino = estado ^ (1 << bit_pos)
-            vecinos.append(vecino)
-            
-        return vecinos
-    
+
     def _construir_representacion_ndimensional(self):
         """
         Construye la representación n-dimensional del sistema como tensores.
@@ -141,6 +56,10 @@ class GeometricSIA(SIA):
         n_vars = len(self.sia_subsistema.indices_ncubos)
         n_bits = len(self.sia_subsistema.dims_ncubos)
         
+        self.logger.info(f"Construyendo representación n-dimensional...")
+        self.logger.info(f"Número de variables: {n_vars}")
+        self.logger.info(f"Número de bits: {n_bits}")
+        
         # Descomponer en tensores elementales
         for i, ncube in enumerate(self.sia_subsistema.ncubos):
             # Extraer el tensor de probabilidades condicionales
@@ -150,7 +69,7 @@ class GeometricSIA(SIA):
             tensor_reordenado = self._reordenar_tensor_little_endian(tensor_original, n_bits)
             self.tensores.append(tensor_reordenado)
             
-        print(f"Construida representación {n_vars}-dimensional con {len(self.tensores)} tensores (little-endian)")
+            self.logger.debug(f"Tensor {i} creado con forma: {tensor_reordenado.shape}")
     
     def _reordenar_tensor_little_endian(self, tensor_original: np.ndarray, n_bits: int) -> np.ndarray:
         """
@@ -191,6 +110,84 @@ class GeometricSIA(SIA):
         
         return tensor_reordenado
     
+    def _mostrar_tensores_y_variables(self):
+        """
+        Muestra información de los tensores y las variables a las que corresponden.
+        """
+        #print("\n" + "="*60)
+        #print("TENSORES Y VARIABLES CORRESPONDIENTES")
+        #print("="*60)
+        
+        # Obtener las variables correspondientes usando el abecedario
+        variables = []
+        for i, indice_ncube in enumerate(self.sia_subsistema.indices_ncubos):
+            if indice_ncube < len(ABECEDARY):
+                variable = ABECEDARY[indice_ncube].lower()
+                variables.append(variable)
+            else:
+                variable = f"var_{indice_ncube}"
+                variables.append(variable)
+        
+        #print(f"Número total de tensores: {len(self.tensores)}")
+        #print(f"Variables del sistema: {variables}")
+        #print()
+        
+        # Mostrar información detallada de cada tensor
+        #for i, (tensor, variable) in enumerate(zip(self.tensores, variables)):
+            #print(f"TENSOR {i} - Variable '{variable.upper()}':")
+            #print(f"  Índice original del n-cubo: {self.sia_subsistema.indices_ncubos[i]}")
+            #print(f"  Forma del tensor: {tensor.shape}")
+            #print(f"  Dimensiones activas: {self.sia_subsistema.ncubos[i].dims}")
+            #print(f"  Datos del tensor (little-endian):")
+            
+            # Mostrar los datos del tensor de forma estructurada
+            #if tensor.ndim <= 3:
+                #print(f"    {tensor}")
+            #else:
+                #print(f"    [Tensor de alta dimensionalidad - forma: {tensor.shape}]")
+            #print()
+        
+        # Mostrar correspondencia con notación little-endian
+        #n_bits = len(self.sia_subsistema.dims_ncubos)
+        #print("CORRESPONDENCIA DE ESTADOS (Little-Endian):")
+        #print("-" * 40)
+        #for estado in range(min(8, 2**n_bits)):  # Mostrar solo los primeros 8 estados
+            #binary_little = self._decimal_to_little_endian_binary(estado, n_bits)
+            #print(f"  Estado {estado}: {binary_little}")
+        #if 2**n_bits > 8:
+            #print(f"  ... (y {2**n_bits - 8} estados más)")
+        #print()
+    
+    def _decimal_to_little_endian_binary(self, decimal: int, n_bits: int) -> str:
+        """
+        Convierte un número decimal a su representación binaria little-endian.
+        """
+        # Obtener representación binaria estándar
+        binary = format(decimal, f'0{n_bits}b')
+        # Invertir para little-endian (bit menos significativo a la izquierda)
+        return binary[::-1]
+    
+    def _obtener_vecinos_hipercubo(self, estado: int, n_bits: int) -> List[int]:
+        """
+        Obtiene los vecinos inmediatos de un estado en el hipercubo (distancia Hamming = 1).
+        Considera la representación little-endian.
+        
+        Args:
+            estado: Estado actual en decimal
+            n_bits: Número de bits del sistema
+            
+        Returns:
+            List[int]: Lista de estados vecinos
+        """
+        vecinos = []
+        
+        # Para cada bit, alternar su valor para obtener vecinos
+        for bit_pos in range(n_bits):
+            vecino = estado ^ (1 << bit_pos)
+            vecinos.append(vecino)
+            
+        return vecinos
+    
     def _calcular_distancia_hamming(self, estado_i: int, estado_j: int, n_bits: int) -> int:
         """
         Calcula la distancia de Hamming entre dos estados.
@@ -214,7 +211,7 @@ class GeometricSIA(SIA):
         self.cache_hamming[clave] = distancia
         return distancia
     
-    def _calcular_costo_transicion_recursivo(self, estado_i: int, estado_j: int, tensor_idx: int, n_bits: int, debug_prints: bool = False) -> float:
+    def _calcular_costo_transicion_recursivo(self, estado_i: int, estado_j: int, tensor_idx: int, n_bits: int) -> float:
         """
         Calcula el costo de transición entre dos estados de forma recursiva con cache.
         
@@ -268,7 +265,7 @@ class GeometricSIA(SIA):
             costo_recursivo = 0.0
             
             for vecino in vecinos_validos:
-                costo_vecino = self._calcular_costo_transicion_recursivo(vecino, estado_j, tensor_idx, n_bits, False)
+                costo_vecino = self._calcular_costo_transicion_recursivo(vecino, estado_j, tensor_idx, n_bits)
                 costo_recursivo += costo_vecino
             
             # CORRECCIÓN CLAVE: Sumar PRIMERO, luego multiplicar por γ
@@ -289,8 +286,10 @@ class GeometricSIA(SIA):
         n_estados = 2 ** n_bits
 
         self.tabla_transiciones = {}
-        
-        print(f"Calculando tabla de costos para {n_vars} variables y {n_estados} estados")
+
+        self.logger.info("Calculando tabla de costos...")
+        self.logger.info(f"Estados totales: {n_estados}")
+        self.logger.info(f"Variables: {n_vars}")
 
         # Crear lista de todas las combinaciones estado_i, estado_j ordenadas por distancia Hamming
         combinaciones = []
@@ -305,317 +304,519 @@ class GeometricSIA(SIA):
         for var_idx in range(n_vars):
             for i, j, distancia in combinaciones:
                 clave = (var_idx, i, j)
-                costo = self._calcular_costo_transicion_recursivo(i, j, var_idx, n_bits, False)
+                costo = self._calcular_costo_transicion_recursivo(i, j, var_idx, n_bits)
                 self.tabla_transiciones[clave] = costo
 
-        print(f"Tabla de costos calculada: {len(self.tabla_transiciones)} entradas")
+        # Crear DataFrame con formato little-endian para Excel
+        self._exportar_tabla_excel(n_vars, n_estados, n_bits)
 
-    def _descubrir_biparticiones_por_costo_cero(self) -> Tuple[Set[int], Set[int]]:
+    def _exportar_tabla_excel(self, n_vars: int, n_estados: int, n_bits: int):
         """
-        Estrategia principal: Descubre biparticiones óptimas mediante análisis de 
-        transiciones de costo cero y patrones de complementariedad causal.
-        
-        Returns:
-            Tuple[Set[int], Set[int]]: La bipartición óptima encontrada
+        Exporta la tabla de costos a Excel con formato little-endian.
+        Mapea correctamente las dimensiones activas a las letras del abecedario.
         """
-        print("="*60)
-        print("INICIANDO ANÁLISIS DE COMPLEMENTARIEDAD CAUSAL")
-        print("="*60)
+        # Obtener nombres de variables y sus dimensiones activas
+        nombres_variables = []
+        dims_activas_por_variable = []
         
-        # Paso 1: Detectar transiciones de costo cero
-        transiciones_cero = self._detectar_transiciones_costo_cero()
+        # Paso 1: Recopilar información sobre las dimensiones activas de cada variable
+        for i, ncube in enumerate(self.sia_subsistema.ncubos):
+            # Obtener dimensiones activas para esta variable
+            dims_activas = ncube.dims
+            dims_activas_por_variable.append(dims_activas)
+            
+            # Obtener nombre de la variable según su índice original
+            indice_ncube = self.sia_subsistema.indices_ncubos[i]
+            if indice_ncube < len(ABECEDARY):
+                variable = ABECEDARY[indice_ncube].upper()
+            else:
+                variable = f"VAR_{indice_ncube}"
+            nombres_variables.append(variable)
         
-        # Paso 2: Construir matriz de interacción entre variables
-        matriz_interaccion = self._construir_matriz_interaccion(transiciones_cero)
+        # Registrar dimensiones activas del mecanismo para depuración
+        #print("\n" + "="*60)
+        #print("DIMENSIONES ACTIVAS DEL MECANISMO")
+        #print("="*60)
+        #for i, (var, dims) in enumerate(zip(nombres_variables, dims_activas_por_variable)):
+            #print(f"Variable {var}: Dimensiones activas {dims} (índice {i})")
+        #print("="*60 + "\n")
         
-        # Paso 3: Identificar grupos complementarios
-        grupos_complementarios = self._identificar_grupos_complementarios(matriz_interaccion)
+        # Crear hojas separadas para cada variable
+        filename = f"tabla_costos_geometric_sia.xlsx"
+        with pd.ExcelWriter(filename) as writer:
+            
+            for var_idx in range(n_vars):
+                # Crear matriz de costos para esta variable
+                matriz_costos = np.zeros((n_estados, n_estados))
+                
+                for i in range(n_estados):
+                    for j in range(n_estados):
+                        clave = (var_idx, i, j)
+                        matriz_costos[i, j] = self.tabla_transiciones.get(clave, 0.0)
+                
+                # Crear etiquetas con variables activas según las dimensiones activas
+                indices_mejorados = []
+                columnas_mejoradas = []
+                
+                # Dimensiones activas para esta variable específica
+                dims_activas = dims_activas_por_variable[var_idx]
+                
+                for estado in range(n_estados):
+                    # Obtener representación binaria
+                    bits = [(estado >> bit) & 1 for bit in range(n_bits)]
+                    
+                    # Identificar qué letras están activas basado en dimensiones activas
+                    letras_activas = []
+                    
+                    # Para cada posición activa en los bits, buscar la letra correspondiente
+                    for pos_bit, valor_bit in enumerate(bits):
+                        if valor_bit == 1 and pos_bit < len(dims_activas):
+                            # Obtener la dimensión real a la que corresponde este bit
+                            dim_real = dims_activas[pos_bit]
+                            
+                            # Convertir esta dimensión a una letra
+                            if dim_real < len(ABECEDARY):
+                                letra = ABECEDARY[dim_real].upper()
+                                letras_activas.append(letra)
+                            else:
+                                letras_activas.append(f"VAR_{dim_real}")
+                    
+                    # Crear etiqueta con formato: número (letras_activas) [bits]
+                    binary_rep = ''.join(str(b) for b in bits[:len(dims_activas)])  # Solo mostrar bits relevantes
+                    etiqueta = f"{estado} ({','.join(letras_activas)}) [{binary_rep}]"
+                    indices_mejorados.append(etiqueta)
+                    columnas_mejoradas.append(etiqueta)
+                
+                # Crear DataFrame con las nuevas etiquetas
+                df = pd.DataFrame(matriz_costos, index=indices_mejorados, columns=columnas_mejoradas)
+                
+                # Guardar en hoja específica con nombre de variable
+                nombre_hoja = f"Variable_{nombres_variables[var_idx]}"
+                df.to_excel(writer, sheet_name=nombre_hoja)
         
-        # Paso 4: Generar biparticiones candidatas basadas en complementariedad
-        candidatas = self._generar_candidatas_por_complementariedad(grupos_complementarios)
+        self.logger.info(f"Tabla de costos exportada a: {filename}")
         
-        # Paso 5: Evaluar candidatas con EMD y seleccionar la óptima
-        biparticion_optima = self._evaluar_candidatas_con_emd(candidatas)
-        
-        return biparticion_optima
+        # Mostrar resumen
+        #print(f"\nTabla de costos calculada y exportada a: {filename}")
+        #print(f"Formato: estado (letras_activas) [representación_binaria]")
+        #print("Hojas creadas:")
+        #for var_idx in range(n_vars):
+            #print(f"  - Variable_{nombres_variables[var_idx]} (dimensiones activas: {dims_activas_por_variable[var_idx]})")
     
-    def _detectar_transiciones_costo_cero(self, umbral_cero: float = 1e-10) -> Dict[int, List[Tuple[int, int]]]:
+    def _calcular_complemento_estado(self, estado_inicial: int, estado_destino: int, n_bits: int) -> int:
         """
-        Detecta todas las transiciones (i, j) tales que t(i, j) ≈ 0 para cada variable.
+        Calcula el estado complementario:
+        - Identifica qué bits cambiaron en la transición original
+        - El complementario cambia los bits que NO cambiaron en la original
+        """
+        # Encontrar qué bits cambiaron en la transición original
+        bits_cambiados = estado_inicial ^ estado_destino
+        
+        # El complementario parte del estado inicial
+        complementario = estado_inicial
+        
+        # Para cada bit que NO cambió en la transición original, cambiarlo
+        for bit_pos in range(n_bits):
+            bit_cambio_en_original = (bits_cambiados >> bit_pos) & 1
+            
+            if not bit_cambio_en_original:  # Si este bit NO cambió en la transición original
+                # Cambiar este bit en el complementario
+                complementario ^= (1 << bit_pos)
+        
+        return complementario
+
+    def _identificar_bits_cambiados(self, estado_inicial: int, estado_destino: int, n_bits: int) -> List[int]:
+        """
+        Identifica qué bits cambiaron entre dos estados y retorna sus posiciones.
+        """
+        diferencia = estado_inicial ^ estado_destino
+        bits_cambiados = []
+        
+        for bit_pos in range(n_bits):
+            if (diferencia >> bit_pos) & 1:
+                bits_cambiados.append(bit_pos)
+        
+        return bits_cambiados
+
+    def _calcular_emd_biparticion(self, conjunto_presente: Set[int], conjunto_futuro: Set[int]) -> float:
+        """
+        Calcula el EMD para una bipartición específica.
         
         Args:
-            umbral_cero: Umbral para considerar un costo como cero
+            conjunto_presente: Variables que van al estado presente (ACTUAL)
+            conjunto_futuro: Variables que van al estado futuro (EFECTO)
             
         Returns:
-            Dict[int, List[Tuple[int, int]]]: Diccionario var_idx -> lista de transiciones (i,j) con costo ≈ 0
+            float: Valor del EMD
         """
-        transiciones_cero = defaultdict(list)
-        n_vars = len(self.sia_subsistema.indices_ncubos)
+        try:
+            # Convertir a arrays numpy
+            indices_presente = np.array(list(conjunto_presente), dtype=np.int8)
+            indices_futuro = np.array(list(conjunto_futuro), dtype=np.int8)
+            
+            #print(f"    Debug EMD - Presente (ACTUAL): {[chr(65 + i) for i in sorted(conjunto_presente)]}")
+            #print(f"    Debug EMD - Futuro (EFECTO): {[chr(65 + i) for i in sorted(conjunto_futuro)]}")
+            
+            # Asegurar que ambos conjuntos tengan al menos un elemento
+            if len(indices_presente) == 0:
+                indices_presente = np.array([0], dtype=np.int8)
+            if len(indices_futuro) == 0:
+                indices_futuro = np.array([1 if len(self.sia_subsistema.indices_ncubos) > 1 else 0], dtype=np.int8)
+            
+            # Realizar bipartición
+            particion = self.sia_subsistema.bipartir(indices_futuro, indices_presente)
+            distribucion_particion = particion.distribucion_marginal()
+            
+            # Calcular EMD
+            emd = emd_efecto(distribucion_particion, self.sia_dists_marginales)
+            #print(f"    Debug EMD - Valor calculado: {emd:.6f}")
+            return emd
+            
+        except Exception as e:
+            self.logger.error(f"Error calculando EMD: {e}")
+            return float('inf')
+
+    def _identificar_biparticion_optima(self) -> Tuple[Set[int], Set[int]]:
+        """
+        Identifica la bipartición óptima evaluando primero el caso especial 000→111
+        y luego analizando otras transiciones y sus complementos.
         
-        print("Detectando transiciones de costo cero...")
+        Returns:
+            Tuple con los dos conjuntos de variables de la bipartición óptima
+        """
+        n_vars = len(self.sia_subsistema.indices_ncubos)
+        n_bits = len(self.sia_subsistema.dims_ncubos)
+        n_estados = 2 ** n_bits
+        
+        # Estado inicial (000...0) y estado todos unos (111...1)
+        estado_inicial = 0
+        estado_todos_unos = 2**n_bits - 1
+        
+        # Lista para almacenar TODAS las particiones candidatas, incluida la especial
+        particiones_candidatas = []
+        
+        # CASO ESPECIAL: Evaluar transición 000→111 directamente sin complemento
+        print(f"\n=== CASO ESPECIAL: EVALUANDO TRANSICIÓN 000→111 ===")
+        print(f"Evaluando t(000, {self._decimal_to_little_endian_binary(estado_todos_unos, n_bits)})")
+        
+        costos_variables_todos_unos = []
         
         for var_idx in range(n_vars):
-            costo_cero_count = 0
-            for clave, costo in self.tabla_transiciones.items():
-                if clave[0] == var_idx and abs(costo) <= umbral_cero:
-                    estado_i, estado_j = clave[1], clave[2]
-                    transiciones_cero[var_idx].append((estado_i, estado_j))
-                    costo_cero_count += 1
-            
-            print(f"Variable {var_idx}: {costo_cero_count} transiciones de costo cero")
+            clave = (var_idx, estado_inicial, estado_todos_unos)
+            costo = self.tabla_transiciones.get(clave, float('inf'))
+            var_letra = chr(65 + var_idx)
+            costos_variables_todos_unos.append((var_idx, costo, var_letra))
+            print(f"Variable {var_letra}: costo = {costo:.4f}")
         
-        return dict(transiciones_cero)
-    
-    def _construir_matriz_interaccion(self, transiciones_cero: Dict[int, List[Tuple[int, int]]]) -> np.ndarray:
-        """
-        Construye una matriz de interacción entre variables basada en transiciones compartidas de costo cero.
-        
-        Args:
-            transiciones_cero: Diccionario de transiciones de costo cero por variable
-            
-        Returns:
-            np.ndarray: Matriz de interacción simétrica n_vars x n_vars
-        """
-        n_vars = len(self.sia_subsistema.indices_ncubos)
-        matriz_interaccion = np.zeros((n_vars, n_vars))
-        
-        print("Construyendo matriz de interacción...")
-        
-        # Para cada par de variables, calcular similaridad en transiciones de costo cero
-        for var_i in range(n_vars):
-            for var_j in range(var_i + 1, n_vars):
-                transiciones_i = set(transiciones_cero.get(var_i, []))
-                transiciones_j = set(transiciones_cero.get(var_j, []))
+        if costos_variables_todos_unos and all(c[1] < float('inf') for c in costos_variables_todos_unos):
+            # CAMBIO: Evaluar todas las variables como candidatas
+            print("\n=== EVALUANDO TODAS LAS VARIABLES COMO CANDIDATAS PARA CASO ESPECIAL ===")
+            for var_idx, costo, var_letra in costos_variables_todos_unos:
+                print(f"\nEvaluando variable {var_letra} como candidata:")
                 
-                # Calcular índice de Jaccard para similitud
-                interseccion = len(transiciones_i & transiciones_j)
-                union = len(transiciones_i | transiciones_j)
+                # Crear bipartición con esta variable en presente
+                conjunto_presente = {var_idx}
+                conjunto_futuro = set(range(n_vars)) - conjunto_presente
                 
-                if union > 0:
-                    similaridad = interseccion / union
+                print(f"Bipartición candidata:")
+                print(f"  Presente: {[chr(65 + i) for i in sorted(conjunto_presente)]}")
+                print(f"  Futuro: {[chr(65 + i) for i in sorted(conjunto_futuro)]}")
+                
+                # Calcular EMD para esta bipartición
+                emd_valor = self._calcular_emd_biparticion(conjunto_presente, conjunto_futuro)
+                print(f"  EMD calculado: {emd_valor:.6f}")
+                if emd_valor < float('inf'):
+                    particiones_candidatas.append({
+                        'transicion_original': (estado_inicial, estado_todos_unos),
+                        'transicion_original_bin': f"t(000, {self._decimal_to_little_endian_binary(estado_todos_unos, n_bits)})",
+                        'promedio_original': costo,
+                        'conjunto_presente': conjunto_presente,
+                        'conjunto_futuro': conjunto_futuro,
+                        'emd': emd_valor,
+                        'info_debug': {
+                            'caso_especial': True,
+                            'variable_evaluada': var_letra,
+                            'costo_variable': costo,
+                            'costos_originales': [c[1] for c in costos_variables_todos_unos]
+                        }
+                    })
+                    
+                    # STOP TEMPRANO: Si EMD = 0, retornar inmediatamente
+                    if emd_valor == 0:
+                        #print(f"  ¡EMD perfecto (0) con variable {var_letra}! Retornando solución óptima.")
+                        return (conjunto_presente, conjunto_futuro)
                 else:
-                    similaridad = 0.0
-                
-                # Complementariedad = 1 - similaridad (variables complementarias tienen pocas transiciones compartidas)
-                complementariedad = 1.0 - similaridad
-                
-                matriz_interaccion[var_i, var_j] = complementariedad
-                matriz_interaccion[var_j, var_i] = complementariedad
-        
-        print("Matriz de interacción construida:")
-        print(matriz_interaccion)
-        
-        return matriz_interaccion
-    
-    def _identificar_grupos_complementarios(self, matriz_interaccion: np.ndarray) -> List[Set[int]]:
-        """
-        Identifica grupos de variables complementarias usando clustering espectral.
-        
-        Args:
-            matriz_interaccion: Matriz de complementariedad entre variables
+                    print(f"  EMD inválido para variable {var_letra}, descartada")
             
-        Returns:
-            List[Set[int]]: Lista de grupos complementarios
-        """
-        n_vars = matriz_interaccion.shape[0]
-        
-        if n_vars <= 2:
-            return [{0}, {1}] if n_vars == 2 else [set(range(n_vars))]
-        
-        print("Identificando grupos complementarios...")
-        
-        # Usar clustering basado en umbral de complementariedad
-        umbral_complementariedad = 0.6
-        grupos = []
-        variables_asignadas = set()
-        
-        # Construir grafo de complementariedad
-        G = nx.Graph()
-        for i in range(n_vars):
-            G.add_node(i)
-            for j in range(i + 1, n_vars):
-                if matriz_interaccion[i, j] >= umbral_complementariedad:
-                    G.add_edge(i, j, weight=matriz_interaccion[i, j])
-        
-        # Encontrar componentes conectadas como grupos
-        componentes = list(nx.connected_components(G))
-        
-        if len(componentes) >= 2:
-            # Si hay múltiples componentes, usar las dos más grandes
-            componentes.sort(key=len, reverse=True)
-            grupos = [componentes[0], componentes[1]]
+            print("  Todas las variables del caso especial evaluadas, continuando análisis...")
         else:
-            # Si solo hay una componente, dividir por métricas de centralidad
-            if len(componentes[0]) > 1:
-                centralidad = nx.eigenvector_centrality(G)
-                nodos_ordenados = sorted(centralidad.items(), key=lambda x: x[1], reverse=True)
-                
-                mitad = len(nodos_ordenados) // 2
-                grupo1 = {nodo for nodo, _ in nodos_ordenados[:mitad]}
-                grupo2 = {nodo for nodo, _ in nodos_ordenados[mitad:]}
-                grupos = [grupo1, grupo2]
-            else:
-                # Fallback: división simple
-                mitad = n_vars // 2
-                grupos = [set(range(mitad)), set(range(mitad, n_vars))]
+            print("  No se pudieron evaluar costos para 000→111, continuando con análisis estándar")
         
-        print(f"Grupos complementarios identificados: {grupos}")
-        self.grupos_complementarios = grupos
+        # ANÁLISIS ESTÁNDAR (excluyendo 000 y 111)
+        print(f"\n=== ANÁLISIS DE TRANSICIONES DESDE ESTADO INICIAL {self._decimal_to_little_endian_binary(estado_inicial, n_bits)} ===")
         
-        return grupos
-    
-    def _generar_candidatas_por_complementariedad(self, grupos_complementarios: List[Set[int]]) -> List[Tuple[Set[int], Set[int]]]:
-        """
-        Genera biparticiones candidatas basadas en grupos complementarios.
+        # PASO 1: Analizar todas las transiciones (excluyendo 000 y 111)
+        transiciones_con_promedio = []
         
-        Args:
-            grupos_complementarios: Lista de grupos de variables complementarias
-            
-        Returns:
-            List[Tuple[Set[int], Set[int]]]: Lista de biparticiones candidatas
-        """
-        candidatas = []
-        n_vars = len(self.sia_subsistema.indices_ncubos)
-        
-        print("Generando candidatas por complementariedad...")
-        
-        # Candidata principal: usar los dos grupos más grandes
-        if len(grupos_complementarios) >= 2:
-            grupo1 = grupos_complementarios[0]
-            grupo2 = grupos_complementarios[1]
-            
-            # Asegurar que todos los nodos estén asignados
-            nodos_restantes = set(range(n_vars)) - grupo1 - grupo2
-            if nodos_restantes:
-                # Asignar nodos restantes al grupo más pequeño
-                if len(grupo1) <= len(grupo2):
-                    grupo1 = grupo1 | nodos_restantes
-                else:
-                    grupo2 = grupo2 | nodos_restantes
-            
-            candidatas.append((grupo1, grupo2))
-        
-        # Candidatas adicionales: variaciones de la principal
-        if candidatas:
-            grupo_base1, grupo_base2 = candidatas[0]
-            
-            # Intercambiar variables entre grupos
-            for var in list(grupo_base1)[:min(2, len(grupo_base1))]:
-                nuevo_grupo1 = grupo_base1 - {var}
-                nuevo_grupo2 = grupo_base2 | {var}
-                if len(nuevo_grupo1) > 0 and len(nuevo_grupo2) > 0:
-                    candidatas.append((nuevo_grupo1, nuevo_grupo2))
-            
-            for var in list(grupo_base2)[:min(2, len(grupo_base2))]:
-                nuevo_grupo1 = grupo_base1 | {var}
-                nuevo_grupo2 = grupo_base2 - {var}
-                if len(nuevo_grupo1) > 0 and len(nuevo_grupo2) > 0:
-                    candidatas.append((nuevo_grupo1, nuevo_grupo2))
-        
-        # Fallback: candidatas balanceadas
-        if not candidatas:
-            mitad = n_vars // 2
-            candidatas.append((set(range(mitad)), set(range(mitad, n_vars))))
-        
-        # Limitar número de candidatas para eficiencia
-        candidatas = candidatas[:10]
-        
-        print(f"Generadas {len(candidatas)} candidatas")
-        return candidatas
-    
-    def _evaluar_candidatas_con_emd(self, candidatas: List[Tuple[Set[int], Set[int]]]) -> Tuple[Set[int], Set[int]]:
-        """
-        Evalúa candidatas usando EMD (Earth Mover's Distance) y selecciona la óptima.
-        
-        Args:
-            candidatas: Lista de biparticiones candidatas
-            
-        Returns:
-            Tuple[Set[int], Set[int]]: Bipartición óptima
-        """
-        mejor_candidata = None
-        mejor_emd = float('inf')
-        
-        print(f"Evaluando {len(candidatas)} candidatas con EMD...")
-        print("="*50)
-        
-        for i, (conjunto1, conjunto2) in enumerate(candidatas):
-            print(f"Candidata {i+1}: {conjunto1} | {conjunto2}")
-            
-            try:
-                # Convertir conjuntos a arrays para bipartición
-                indices_alcance = np.array(list(conjunto1), dtype=np.int8)
-                indices_mecanismo = np.array(list(conjunto2), dtype=np.int8)
-                
-                # Realizar bipartición
-                particion = self.sia_subsistema.bipartir(indices_alcance, indices_mecanismo)
-                distribucion_marginal = particion.distribucion_marginal()
-                
-                # Calcular EMD
-                emd = emd_efecto(distribucion_marginal, self.sia_dists_marginales)
-                
-                # Almacenar en memoria
-                clave_candidata = (tuple(sorted(conjunto1)), tuple(sorted(conjunto2)))
-                self.memoria_biparticiones[clave_candidata] = (emd, distribucion_marginal)
-                
-                print(f"  EMD = {emd:.8f}")
-                
-                # Actualizar mejor candidata
-                if emd < mejor_emd:
-                    mejor_emd = emd
-                    mejor_candidata = (conjunto1, conjunto2)
-                    print(f"  *** NUEVA MEJOR CANDIDATA ***")
-                
-            except Exception as e:
-                print(f"  Error: {e}")
+        for estado_destino in range(1, n_estados):
+            # CAMBIO: Excluir explícitamente el estado todos unos (111)
+            if estado_destino == estado_todos_unos:
+                #print(f"\nSaltando transición t(000, {self._decimal_to_little_endian_binary(estado_destino, n_bits)}) (ya evaluada en caso especial)")
                 continue
+                
+            estado_destino_bin = self._decimal_to_little_endian_binary(estado_destino, n_bits)
+            #print(f"\n--- ANALIZANDO TRANSICIÓN t(000, {estado_destino_bin}) ---")
+            
+            # Obtener costos para cada variable en esta transición
+            costos_variables = []
+            for var_idx in range(n_vars):
+                clave = (var_idx, estado_inicial, estado_destino)
+                costo = self.tabla_transiciones.get(clave, float('inf'))
+                # Convertir variable index a letra para mostrar
+                var_letra = chr(65 + var_idx)  # A, B, C...
+                costos_variables.append(costo)
+                #print(f"Variable {var_letra}: costo = {costo:.4f}")
+            
+             # Calcular promedio de costos
+            if costos_variables and all(c < float('inf') for c in costos_variables):
+                promedio = sum(costos_variables) / len(costos_variables)
+                # print(f"Promedio de costos: {promedio:.4f}")
+                
+                transiciones_con_promedio.append({
+                    'estado_destino': estado_destino,
+                    'estado_destino_bin': estado_destino_bin,
+                    'costos_variables': costos_variables,
+                    'promedio': promedio
+                })
+            else:
+                print("Transición descartada por costos infinitos")
         
-        if mejor_candidata is None:
-            # Fallback
-            n_vars = len(self.sia_subsistema.indices_ncubos)
-            mitad = n_vars // 2
-            mejor_candidata = (set(range(mitad)), set(range(mitad, n_vars)))
-            mejor_emd = 1.0
+        # PASO 2: Seleccionar transiciones con mejor promedio (menor costo)
+        if not transiciones_con_promedio:
+            #print("No se encontraron transiciones válidas")
+            if particiones_candidatas:
+                #print("Usando partición del caso especial")
+                mejor_particion = min(particiones_candidatas, key=lambda x: x['emd'])
+                return (mejor_particion['conjunto_presente'], mejor_particion['conjunto_futuro'])
+            else:
+                # Bipartición por defecto
+                mitad = n_vars // 2
+                return (set(range(mitad)), set(range(mitad, n_vars)))
         
-        print("="*50)
-        print(f"BIPARTICIÓN ÓPTIMA ENCONTRADA:")
-        print(f"  Grupo 1: {mejor_candidata[0]}")
-        print(f"  Grupo 2: {mejor_candidata[1]}")
-        print(f"  EMD: {mejor_emd:.8f}")
-        print("="*50)
+        # Ordenar por promedio ascendente (menor costo primero)
+        transiciones_con_promedio.sort(key=lambda x: x['promedio'])
         
-        return mejor_candidata
+        #print(f"\n=== TRANSICIONES ORDENADAS POR PROMEDIO (MEJOR PRIMERO) ===")
+        #for i, trans in enumerate(transiciones_con_promedio[:5]):  # Mostrar top 5
+           # print(f"{i+1}. t(000, {trans['estado_destino_bin']}) - Promedio: {trans['promedio']:.4f}")
+        
+        # Seleccionar las mejores transiciones (top 30% o mínimo 3)
+        num_mejores = max(3, len(transiciones_con_promedio) // 3)
+        mejores_transiciones = transiciones_con_promedio[:num_mejores]
+        
+        #print(f"\n=== ANALIZANDO {len(mejores_transiciones)} MEJORES TRANSICIONES PARA PARTICIONES ===")
+        
+        # PASO 3: Para cada transición seleccionada, analizar con su complemento
+        for trans in mejores_transiciones:
+            estado_destino = trans['estado_destino']
+            costos_originales = trans['costos_variables']
+            
+           # print(f"\n--- ANALIZANDO TRANSICIÓN t(000, {trans['estado_destino_bin']}) ---")
+            #print(f"Costos originales: {[f'{chr(65+i)}={c:.4f}' for i, c in enumerate(costos_originales)]}")
+            
+            # PASO 3.1: Calcular estado complemento
+            estado_complemento = self._calcular_complemento_estado(estado_inicial, estado_destino, n_bits)
+            estado_complemento_bin = self._decimal_to_little_endian_binary(estado_complemento, n_bits)
+            
+            #print(f"Estado complemento: t(000, {estado_complemento_bin})")
+            
+            # PASO 3.2: Obtener costos del complemento
+            costos_complemento = []
+            for var_idx in range(n_vars):
+                clave = (var_idx, estado_inicial, estado_complemento)
+                costo = self.tabla_transiciones.get(clave, float('inf'))
+                costos_complemento.append(costo)
+            
+            #print(f"Costos complemento: {[f'{chr(65+i)}={c:.4f}' for i, c in enumerate(costos_complemento)]}")
+            
+            # PASO 3.3: Comparar variable por variable y seleccionar las de menor costo
+            variables_presente = []  # Variables que van al presente
+            variables_futuro = []    # Variables que van al futuro
+            
+            #print("Comparación variable por variable:")
+            for var_idx in range(n_vars):
+                costo_original = costos_originales[var_idx]
+                costo_complemento = costos_complemento[var_idx]
+                var_letra = chr(65 + var_idx)
+                
+                if costo_original <= costo_complemento:
+                    variables_presente.append(var_idx)
+                    #print(f"Variable {var_letra}: PRESENTE (costo {costo_original:.4f} <= {costo_complemento:.4f})")
+                else:
+                    variables_futuro.append(var_idx)
+                    #print(f"Variable {var_letra}: FUTURO (costo {costo_complemento:.4f} < {costo_original:.4f})")
+            
+            # PASO 3.4: Analizar el bit cambiante
+            bits_cambiados = self._identificar_bits_cambiados(estado_inicial, estado_destino, n_bits)
+            #print(f"Bits que cambiaron en transición original: {bits_cambiados}")
+            
+            if bits_cambiados:
+                # El primer bit que cambia determina qué variable debe estar en presente
+                bit_principal = bits_cambiados[0]  # Bit más significativo que cambió
+                var_bit_principal = bit_principal  # Variable correspondiente al bit
+                var_letra_principal = chr(65 + var_bit_principal)
+                
+                #print(f"Variable principal que cambia: {var_letra_principal} (bit {bit_principal})")
+                
+                # PASO 3.5: Ajustar partición según regla del bit cambiante
+                # La variable del bit que cambia DEBE estar en presente
+                if var_bit_principal not in variables_presente:
+                    #print(f"AJUSTE: Moviendo variable {var_letra_principal} de futuro a presente (regla del bit cambiante)")
+                    if var_bit_principal in variables_futuro:
+                        variables_futuro.remove(var_bit_principal)
+                    variables_presente.append(var_bit_principal)
+        
+            # PASO 3.6: Asegurar que ambos conjuntos tengan elementos
+            if not variables_presente:
+                # Mover la primera variable del futuro al presente
+                if variables_futuro:
+                    var_movida = variables_futuro.pop(0)
+                    variables_presente.append(var_movida)
+                    #print(f"AJUSTE: Moviendo variable {chr(65 + var_movida)} a presente (conjunto vacío)")
     
+            if not variables_futuro:
+                # Mover la última variable del presente al futuro
+                if len(variables_presente) > 1:
+                    var_movida = variables_presente.pop(-1)
+                    variables_futuro.append(var_movida)
+                    #print(f"AJUSTE: Moviendo variable {chr(65 + var_movida)} a futuro (conjunto vacío)")
+    
+            # PASO 3.7: Formar la partición
+            conjunto_presente = set(variables_presente)
+            conjunto_futuro = set(variables_futuro)
+            
+            #print(f"PARTICIÓN RESULTANTE:")
+            #print(f"  Presente: {[chr(65 + i) for i in sorted(conjunto_presente)]}")
+            #print(f"  Futuro: {[chr(65 + i) for i in sorted(conjunto_futuro)]}")
+            
+            # PASO 3.8: Calcular EMD para esta partición
+            emd_valor = self._calcular_emd_biparticion(conjunto_presente, conjunto_futuro)
+            
+            if emd_valor < float('inf'):
+                particiones_candidatas.append({
+                    'transicion_original': (estado_inicial, estado_destino),
+                    'transicion_original_bin': f"t(000, {trans['estado_destino_bin']})",
+                    'promedio_original': trans['promedio'],
+                    'conjunto_presente': conjunto_presente,
+                    'conjunto_futuro': conjunto_futuro,
+                    'emd': emd_valor,
+                    'info_debug': {
+                        'costos_originales': costos_originales,
+                        'costos_complemento': costos_complemento,
+                        'bits_cambiados': bits_cambiados
+                    }
+                })
+                
+                #print(f"  EMD calculado: {emd_valor:.6f}")
+                
+                # STOP TEMPRANO: Si EMD = 0, retornar inmediatamente
+                if emd_valor == 0:
+                    #print("  ¡EMD perfecto (0)! Retornando solución óptima.")
+                    return (conjunto_presente, conjunto_futuro)
+            else:
+                print("  EMD inválido, partición descartada")
+
+        # PASO 4: Seleccionar la mejor partición basada en EMD mínimo
+        if particiones_candidatas:
+            # CAMBIO: Puede elegir entre candidatas normales y la especial
+            mejor_particion = min(particiones_candidatas, key=lambda x: x['emd'])
+            
+            # Identificar si es la partición del caso especial
+            es_caso_especial = mejor_particion.get('info_debug', {}).get('caso_especial', False)
+            
+            #print(f"\n=== MEJOR PARTICIÓN ENCONTRADA ===")
+            if es_caso_especial:
+                print(f"TIPO: CASO ESPECIAL 000→111")
+            else:
+                print(f"TIPO: TRANSICIÓN ESTÁNDAR")
+            print(f"Transición base: {mejor_particion['transicion_original_bin']}")
+            print(f"Promedio de costos: {mejor_particion['promedio_original']:.6f}")
+            print(f"Presente: {[chr(65 + i) for i in sorted(mejor_particion['conjunto_presente'])]}")
+            print(f"Futuro: {[chr(65 + i) for i in sorted(mejor_particion['conjunto_futuro'])]}")
+            print(f"EMD final: {mejor_particion['emd']:.6f}")
+            
+            return (mejor_particion['conjunto_presente'], mejor_particion['conjunto_futuro'])
+        else:
+            print("\n=== NO SE ENCONTRARON PARTICIONES VÁLIDAS - USANDO PARTICIÓN POR DEFECTO ===")
+            # Bipartición por defecto
+            mitad = n_vars // 2
+            return (set(range(mitad)), set(range(mitad, n_vars)))
+
     def _formatear_resultado(self, biparticion_optima: Tuple[Set[int], Set[int]]) -> Solution:
         """
-        Formatea el resultado en el formato compatible con el sistema.
-        """
-        conjunto1, conjunto2 = biparticion_optima
-        clave_candidata = (tuple(sorted(conjunto1)), tuple(sorted(conjunto2)))
+        Formatea el resultado en formato compatible con el sistema.
         
-        if clave_candidata in self.memoria_biparticiones:
-            perdida, distribucion_particion = self.memoria_biparticiones[clave_candidata]
-        else:
+        Args:
+            biparticion_optima: Tuple con los conjuntos presente y futuro
+            
+        Returns:
+            Solution: Objeto solución formateado
+        """
+        conjunto_presente, conjunto_futuro = biparticion_optima
+        
+        try:
+            # Convertir a arrays numpy
+            indices_presente = np.array(list(conjunto_presente), dtype=np.int8)
+            indices_futuro = np.array(list(conjunto_futuro), dtype=np.int8)
+            
+            # Asegurar que ambos conjuntos tengan al menos un elemento
+            if len(indices_presente) == 0:
+                indices_presente = np.array([0], dtype=np.int8)
+            if len(indices_futuro) == 0:
+                indices_futuro = np.array([1 if len(self.sia_subsistema.indices_ncubos) > 1 else 0], dtype=np.int8)
+            
+            # Realizar bipartición
+            particion = self.sia_subsistema.bipartir(indices_presente, indices_futuro)
+            distribucion_particion = particion.distribucion_marginal()
+            
+            # Calcular EMD
+            perdida = emd_efecto(distribucion_particion, self.sia_dists_marginales)
+            
+            # Crear nodos en formato (tiempo, índice)
+            nodos_seleccionados = []
+            
+            # Presente -> ACTUAL
+            for idx in conjunto_presente:
+                nodos_seleccionados.append((ACTUAL, idx))
+            
+            # Futuro -> EFECTO
+            for idx in conjunto_futuro:
+                nodos_seleccionados.append((EFECTO, idx))
+            
+            # Obtener complemento
+            todos_nodos = set()
+            n_vars = len(self.sia_subsistema.indices_ncubos)
+            
+            for i in range(n_vars):
+                todos_nodos.add((EFECTO, i))
+                todos_nodos.add((ACTUAL, i))
+            
+            nodos_complemento = list(todos_nodos - set(nodos_seleccionados))
+            
+            # Formatear partición
+            fmt_particion = fmt_biparte_q(nodos_seleccionados, nodos_complemento)
+            
+        except Exception as e:
+            self.logger.error(f"Error en formateo final: {e}")
             perdida = 1.0
             distribucion_particion = self.sia_dists_marginales
-        
-        # Formatear partición para visualización
-        nodos_conjunto1 = [(EFECTO, idx) for idx in conjunto1]
-        nodos_conjunto2 = [(ACTUAL, idx) for idx in conjunto2]
-        
-        fmt_particion = fmt_biparte_q(nodos_conjunto1, nodos_conjunto2)
+            fmt_particion = {"mecanismo": [], "alcance": []}
         
         return Solution(
-            estrategia="Geometric-SIA-Optimized",
+            estrategia="GeometricSIA",
             perdida=perdida,
             distribucion_subsistema=self.sia_dists_marginales,
             distribucion_particion=distribucion_particion,
             tiempo_total=time.time() - self.sia_tiempo_inicio,
-            particion=fmt_particion,
+            particion=fmt_particion
         )
-    
-    def __str__(self) -> str:
-        return f"GeometricSIA(variables={len(getattr(self.sia_subsistema, 'indices_ncubos', []))}, " \
-               f"estados_calculados={len(self.tabla_transiciones)}, " \
-               f"biparticiones_evaluadas={len(self.memoria_biparticiones)}, " \
-               f"grupos_complementarios={len(self.grupos_complementarios)})"

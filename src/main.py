@@ -2,6 +2,7 @@ from src.controllers.manager import Manager
 from src.controllers.strategies.force import BruteForce
 from src.controllers.strategies.q_nodes import QNodes
 from src.controllers.strategies.geometric import GeometricSIA
+#from src.controllers.strategies.geometric_prueba import GeometricSIA
 
 
 def iniciar():
